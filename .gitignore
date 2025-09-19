@@ -1,6 +1,13 @@
 # Sensitive data
 PII/
 
+# Calendar files that should be in PII
+*Calendar*.xlsx
+*calendar*.xlsx
+
+# Claude Code configuration
+.claude/
+
 # Python
 __pycache__/
 *.py[cod]
