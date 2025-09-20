@@ -1,5 +1,6 @@
 # Sensitive data
 PII/
+.env
 
 # Calendar files that should be in PII
 *Calendar*.xlsx

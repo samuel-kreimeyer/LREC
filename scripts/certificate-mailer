@@ -1,0 +1,22 @@
+#!/bin/bash
+
+# Little Rock Engineers Club - Certificate Mailer
+# Generates certificates of attendance from attendance.xlsx and Calendar.xlsx files
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$SCRIPT_DIR/source/certificate-mailer"
+
+# Check if the Go binary exists
+if [ ! -f "$SOURCE_DIR/certificate-mailer" ]; then
+    echo "Building certificate-mailer..."
+    cd "$SOURCE_DIR" || exit 1
+    go build -o certificate-mailer || {
+        echo "Error: Failed to build certificate-mailer"
+        echo "Make sure Go is installed and dependencies are available"
+        exit 1
+    }
+fi
+
+# Run the certificate mailer
+cd "$SOURCE_DIR" || exit 1
+./certificate-mailer "$@"
