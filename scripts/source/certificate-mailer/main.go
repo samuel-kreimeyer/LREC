@@ -9,8 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/jung-kurt/gofpdf"
 	"github.com/xuri/excelize/v2"
+	"gopkg.in/gomail.v2"
 )
 
 type EventInfo struct {
@@ -22,15 +24,50 @@ type EventInfo struct {
 }
 
 type Attendee struct {
-	Name string
+	Name  string
+	Email string
+}
+
+type EmailConfig struct {
+	SMTPHost    string
+	SMTPPort    int
+	Email       string
+	AppPassword string
 }
 
 func main() {
+	// Load environment variables
+	err := godotenv.Load("../../../.env")
+	if err != nil {
+		log.Fatalf("Error loading .env file: %v", err)
+	}
+
+	// Setup email configuration
+	emailConfig := EmailConfig{
+		SMTPHost:    "smtp.gmail.com",
+		SMTPPort:    587,
+		Email:       os.Getenv("GMAIL_EMAIL"),
+		AppPassword: os.Getenv("GMAIL_APP_PASSWORD"),
+	}
+
+	if emailConfig.Email == "" || emailConfig.AppPassword == "" {
+		log.Fatalf("Gmail credentials not found in .env file. Please set GMAIL_EMAIL and GMAIL_APP_PASSWORD")
+	}
+
+	// Read roster to get email mappings
+	roster, err := readRoster("../../../PII/Roster.xlsx")
+	if err != nil {
+		log.Fatalf("Error reading roster: %v", err)
+	}
+
 	// Read attendance data
 	attendees, err := readAttendance("../../../PII/Attendance.xlsx")
 	if err != nil {
 		log.Fatalf("Error reading attendance: %v", err)
 	}
+
+	// Match attendees with email addresses from roster
+	attendees = matchAttendeesWithEmails(attendees, roster)
 
 	// Read calendar data and get most recent event
 	event, err := getMostRecentEvent("../../../PII/Calendar.xlsx")
@@ -42,17 +79,27 @@ func main() {
 	tempDir := "temp_certificates"
 	os.MkdirAll(tempDir, 0755)
 
-	// Generate certificates for each attendee
+	// Generate certificates and send individual emails
+	sentCount := 0
 	for _, attendee := range attendees {
-		err := generateCertificate(attendee, event, tempDir)
+		filePath, err := generateCertificate(attendee, event, tempDir)
 		if err != nil {
 			log.Printf("Error generating certificate for %s: %v", attendee.Name, err)
 			continue
 		}
 		fmt.Printf("Generated certificate for %s\n", attendee.Name)
+
+		err = sendIndividualCertificateEmail(emailConfig, event, attendee, filePath)
+		if err != nil {
+			log.Printf("Error sending email to %s: %v", attendee.Name, err)
+		} else {
+			sentCount++
+			fmt.Printf("Email sent to %s (%s)\n", attendee.Name, attendee.Email)
+		}
+
 	}
 
-	fmt.Printf("\nSuccessfully generated %d certificates in %s directory\n", len(attendees), tempDir)
+	fmt.Printf("\nSuccessfully generated %d certificates and sent %d emails\n", len(attendees), sentCount)
 }
 
 func readAttendance(filepath string) ([]Attendee, error) {
@@ -93,7 +140,7 @@ func readAttendance(filepath string) ([]Attendee, error) {
 	for i := 1; i < len(rows); i++ {
 		if len(rows[i]) > nameCol && rows[i][nameCol] != "" {
 			name := convertNameFormat(rows[i][nameCol])
-			attendees = append(attendees, Attendee{Name: name})
+			attendees = append(attendees, Attendee{Name: name, Email: ""})
 		}
 	}
 
@@ -241,7 +288,68 @@ func parseFlexibleDate(dateStr string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unable to parse date: %s", dateStr)
 }
 
-func generateCertificate(attendee Attendee, event EventInfo, outputDir string) error {
+func readRoster(filepath string) (map[string]string, error) {
+	f, err := excelize.OpenFile(filepath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	sheets := f.GetSheetList()
+	if len(sheets) == 0 {
+		return nil, fmt.Errorf("no sheets found in roster file")
+	}
+
+	rows, err := f.GetRows(sheets[0])
+	if err != nil {
+		return nil, err
+	}
+
+	nameToEmail := make(map[string]string)
+	nameCol, emailCol := -1, -1
+
+	// Find Name and Email columns
+	if len(rows) > 0 {
+		for i, cell := range rows[0] {
+			cellLower := strings.ToLower(cell)
+			if strings.Contains(cellLower, "name") {
+				nameCol = i
+			} else if strings.Contains(cellLower, "email") {
+				emailCol = i
+			}
+		}
+	}
+
+	if nameCol == -1 || emailCol == -1 {
+		return nil, fmt.Errorf("Name or Email column not found in roster")
+	}
+
+	// Read name-email mappings (skip header row)
+	for i := 1; i < len(rows); i++ {
+		if len(rows[i]) > nameCol && len(rows[i]) > emailCol {
+			name := strings.TrimSpace(rows[i][nameCol])
+			email := strings.TrimSpace(rows[i][emailCol])
+			if name != "" && email != "" {
+				// Convert name to match attendance format
+				name = convertNameFormat(name)
+				nameToEmail[name] = email
+			}
+		}
+	}
+
+	return nameToEmail, nil
+}
+
+func matchAttendeesWithEmails(attendees []Attendee, roster map[string]string) []Attendee {
+	for i, attendee := range attendees {
+		if email, found := roster[attendee.Name]; found {
+			attendees[i].Email = email
+		}
+	}
+	return attendees
+}
+
+func generateCertificate(attendee Attendee, event EventInfo, outputDir string) (string, error) {
 	// Create PDF in landscape orientation - US Letter
 	pdf := gofpdf.New("L", "mm", "Letter", "")
 	pdf.AddPage()
@@ -334,5 +442,53 @@ func generateCertificate(attendee Attendee, event EventInfo, outputDir string) e
 	filename := fmt.Sprintf("COA_%s_%s.pdf", cleanName, cleanDate)
 	filepath := filepath.Join(outputDir, filename)
 
-	return pdf.OutputFileAndClose(filepath)
+	err := pdf.OutputFileAndClose(filepath)
+	if err != nil {
+		return "", err
+	}
+	return filepath, nil
+}
+
+func sendIndividualCertificateEmail(config EmailConfig, event EventInfo, attendee Attendee, certificatePath string) error {
+	// Create email message
+	m := gomail.NewMessage()
+
+	recipient := attendee.Email
+	if recipient == "" {
+		return fmt.Errorf("no email address for attendee %s", attendee.Name)
+	}
+
+	// Set email headers
+	m.SetHeader("From", config.Email)
+	m.SetHeader("To", recipient)
+	m.SetHeader("Subject", fmt.Sprintf("LREC Certificate of Attendance - %s - %s", attendee.Name, event.Date))
+
+	// Create email body
+	body := fmt.Sprintf(`Dear %s,
+
+Please find attached your Certificate of Attendance for the Little Rock Engineers Club presentation:
+
+Speaker: %s
+Topic: %s
+Date: %s
+
+Thank you for attending this presentation.
+
+Best regards,
+Little Rock Engineers Club`, attendee.Name, event.Speaker, event.Topic, event.Date)
+
+	m.SetBody("text/plain", body)
+
+	// Attach the individual certificate
+	m.Attach(certificatePath)
+
+	// Create SMTP dialer
+	d := gomail.NewDialer(config.SMTPHost, config.SMTPPort, config.Email, config.AppPassword)
+
+	// Send email
+	if err := d.DialAndSend(m); err != nil {
+		return fmt.Errorf("failed to send email: %v", err)
+	}
+
+	return nil
 }
