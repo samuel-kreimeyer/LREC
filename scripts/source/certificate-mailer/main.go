@@ -37,7 +37,10 @@ type EmailConfig struct {
 
 func main() {
 	// Load environment variables
-	err := godotenv.Load("../../../.env")
+
+	// dir, _ := os.Getwd()
+	// fmt.Println("Current working directory:", dir)
+	err := godotenv.Load("../.env")
 	if err != nil {
 		log.Fatalf("Error loading .env file: %v", err)
 	}
@@ -55,13 +58,13 @@ func main() {
 	}
 
 	// Read roster to get email mappings
-	roster, err := readRoster("../../../PII/Roster.xlsx")
+	roster, err := readRoster("../PII/Roster.xlsx")
 	if err != nil {
 		log.Fatalf("Error reading roster: %v", err)
 	}
 
 	// Read attendance data
-	attendees, err := readAttendance("../../../PII/Attendance.xlsx")
+	attendees, err := readAttendance("../PII/Attendance.xlsx")
 	if err != nil {
 		log.Fatalf("Error reading attendance: %v", err)
 	}
@@ -70,7 +73,7 @@ func main() {
 	attendees = matchAttendeesWithEmails(attendees, roster)
 
 	// Read calendar data and get most recent event
-	event, err := getMostRecentEvent("../../../PII/Calendar.xlsx")
+	event, err := getMostRecentEvent("../PII/Calendar.xlsx")
 	if err != nil {
 		log.Fatalf("Error reading calendar: %v", err)
 	}
@@ -140,6 +143,7 @@ func readAttendance(filepath string) ([]Attendee, error) {
 	for i := 1; i < len(rows); i++ {
 		if len(rows[i]) > nameCol && rows[i][nameCol] != "" {
 			name := convertNameFormat(rows[i][nameCol])
+			fmt.Printf("Roster name = %s \n", name)
 			attendees = append(attendees, Attendee{Name: name, Email: ""})
 		}
 	}
@@ -312,7 +316,7 @@ func readRoster(filepath string) (map[string]string, error) {
 	if len(rows) > 0 {
 		for i, cell := range rows[0] {
 			cellLower := strings.ToLower(cell)
-			if strings.Contains(cellLower, "name") {
+			if cellLower == "name" {
 				nameCol = i
 			} else if strings.Contains(cellLower, "email") {
 				emailCol = i
@@ -358,7 +362,7 @@ func generateCertificate(attendee Attendee, event EventInfo, outputDir string) (
 	pageWidth, _ := pdf.GetPageSize()
 
 	// Add skyline image at the top left
-	skylinePath := "../../../scripts/skyline.png"
+	skylinePath := "../scripts/skyline.png"
 	imageInfo := pdf.RegisterImage(skylinePath, "PNG")
 	if imageInfo != nil {
 		// Place skyline image at top left
